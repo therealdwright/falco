@@ -32,15 +32,14 @@ static void check_for_ignored_events(falco::app::state& s)
 	s.engine->evttypes_for_ruleset(source, rule_events);
 
 	/* Get the events we consider interesting from the application state `ppm_sc` codes. */
-	std::unique_ptr<sinsp> inspector(new sinsp());
-	std::unordered_set<uint32_t> events(rule_events.begin(), rule_events.end());
-
-	auto event_names = inspector->get_events_names(events);
-	for (const auto& n : inspector->get_events_names(s.ppm_event_info_of_interest))
+	libsinsp::events::set<ppm_event_code> events;
+	for (const auto& ev : rule_events)
 	{
-		event_names.erase(n);
+		events.insert((ppm_event_code) ev);
 	}
 
+	// todo(jasondellaluce,fededp): fix this into libscap as it does not consider old events
+	auto event_names = libsinsp::events::event_set_to_names(events.diff(s.selected_event_set));
 	if(event_names.empty())
 	{
 		return;

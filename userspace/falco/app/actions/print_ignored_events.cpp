@@ -41,24 +41,14 @@ falco::app::run_result falco::app::actions::print_ignored_events(falco::app::sta
 	configure_interesting_sets(s);
 
 	/* Search for all the ignored syscalls. */
-	std::unordered_set<uint32_t> all_events;
-	for (uint32_t j = 0; j < PPM_EVENT_MAX; j++)
-	{
-		if (!sinsp::is_old_version_event(j)
-				&& !sinsp::is_unused_event(j)
-				&& !sinsp::is_unknown_event(j))
-		{
-			all_events.insert(j);
-		}
-	}
+	auto events = libsinsp::events::all_event_set().filter([](ppm_event_code e) {
+		return !libsinsp::events::is_old_version_event(e)
+				&& !libsinsp::events::is_unused_event(e)
+				&& !libsinsp::events::is_unknown_event(e);
+	});
 
-	std::unique_ptr<sinsp> inspector(new sinsp());
-	auto ignored_event_names = inspector->get_events_names(all_events);
-	for (const auto &n : inspector->get_events_names(s.ppm_event_info_of_interest))
-	{
-		ignored_event_names.erase(n);
-	}
-
+	// todo(jasondellaluce,fededp): fix this into libscap as it does not consider old events
+	auto ignored_event_names = libsinsp::events::event_set_to_names(events.diff(s.selected_event_set));
 	std::cout << "Ignored Event(s):" << std::endl;
 	for(const auto& it : ignored_event_names)
 	{
