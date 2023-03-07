@@ -7,47 +7,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-minimal:
-    runs-on: ubuntu-20.04
+  build-and-test-system-deps:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04]
+        minimal: ['On', 'Off']
+        buildtype: ['Release', 'Debug']
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Update base image
-        run: sudo apt update -y
-
-      - name: Install build dependencies
-        run: sudo DEBIAN_FRONTEND=noninteractive apt install libjq-dev libyaml-cpp-dev libelf-dev cmake build-essential git -y
-
-      - name: Prepare project
-        run: |
-          mkdir build-minimal
-          pushd build-minimal
-          cmake -DMINIMAL_BUILD=On -DBUILD_BPF=Off -DBUILD_DRIVER=Off -DCMAKE_BUILD_TYPE=Release -DBUILD_FALCO_UNIT_TESTS=On ..
-          popd
-
-      - name: Build
-        run: |
-          pushd build-minimal
-          make -j4 all
-          popd
-
-      - name: Run unit tests
-        run: |
-          pushd build-minimal
-          sudo ./unit_tests/falco_unit_tests 
-          popd
-
-  build-ubuntu-focal:
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+          submodules: 'true'
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Update base image
@@ -60,7 +33,13 @@ jobs:
         run: |
           mkdir build
           pushd build
-          cmake -DBUILD_BPF=On -DBUILD_FALCO_UNIT_TESTS=On ..
+          cmake \
+            -DUSE_BUNDLED_DEPS=Off \
+            -DBUILD_FALCO_UNIT_TESTS=On \
+            -DCMAKE_BUILD_TYPE=${{ matrix.buildtype }} \
+            -DBUILD_BPF=${{ matrix.minimal }} \
+            -DMINIMAL_BUILD=${{ matrix.minimal }} \
+            ..
           popd
 
       - name: Build
@@ -75,36 +54,43 @@ jobs:
           sudo ./unit_tests/falco_unit_tests 
           popd
 
-  build-ubuntu-focal-debug:
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Setup Go
+        if: matrix.minimal == 'Off'
+        uses: actions/setup-go@v3
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          go-version: '>=1.17.0'
 
-      - name: Update base image
-        run: sudo apt update -y
-
-      - name: Install build dependencies
-        run: sudo DEBIAN_FRONTEND=noninteractive apt install libssl-dev libyaml-dev libc-ares-dev libprotobuf-dev protobuf-compiler libjq-dev libyaml-cpp-dev libgrpc++-dev protobuf-compiler-grpc rpm libelf-dev cmake build-essential libcurl4-openssl-dev linux-headers-$(uname -r) clang llvm git -y
-
-      - name: Prepare project
+      - name: Install go-junit-report
+        if: matrix.minimal == 'Off'
         run: |
-          mkdir build
-          pushd build
-          cmake -DCMAKE_BUILD_TYPE=debug -DBUILD_BPF=On -DBUILD_FALCO_UNIT_TESTS=On ..
+          pushd submodules/falcosecurity-testing
+          go install github.com/jstemmer/go-junit-report/v2@latest
+          popd
+  
+      - name: Generate regression test files
+        if: matrix.minimal == 'Off'
+        run: |
+          pushd submodules/falcosecurity-testing
+          go generate ./...
           popd
 
-      - name: Build
+      - name: Run regression tests
+        if: matrix.minimal == 'Off'
         run: |
-          pushd build
-          KERNELDIR=/lib/modules/$(uname -r)/build make -j4 all
+          pushd submodules/falcosecurity-testing
+          stat ./build/falco.test
+          stat ${{ github.workspace }}/build/userspace/falco/falco
+          ./build/falco.test \
+            -test.timeout=90s \
+            -test.v \
+            -falco-binary=${{ github.workspace }}/build/userspace/falco/falco \
+            >> ./report.txt 2>&1 || true
+          cat ./report.txt | go-junit-report -set-exit-code > report.xml
           popd
 
-      - name: Run unit tests
-        run: |
-          pushd build
-          sudo ./unit_tests/falco_unit_tests 
-          popd
+      - name: Test Summary
+        if: matrix.minimal == 'Off' && (success() || failure())
+        uses: test-summary/action@v2
+        with:
+          paths: "submodules/falcosecurity-testing/report.xml"
+          show: "fail"
