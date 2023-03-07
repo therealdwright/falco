@@ -53,6 +53,17 @@ jobs:
           pushd build
           sudo ./unit_tests/falco_unit_tests 
           popd
+      
+      - name: Build and install package
+        if: matrix.minimal == 'Off'
+        run: |
+          pushd build
+          cmake -DCPACK_GENERATOR=TGZ ..
+          make -j4 package
+          tar -xvf $(ls *.tar.gz)
+          cd $(ls *.tar.gz | sed -e 's/\.tar\.gz$//')
+          sudo cp -r * /
+          popd
 
       - name: Setup Go
         if: matrix.minimal == 'Off'
