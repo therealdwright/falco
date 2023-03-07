@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test-system-deps:
+  build-system-deps:
     strategy:
       fail-fast: false
       matrix:
@@ -53,9 +53,63 @@ jobs:
           pushd build
           sudo ./unit_tests/falco_unit_tests 
           popd
+
+  build-bundled-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install build dependencies
+        run: |
+          mkdir deps
+          pushd deps
+          sudo apt update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends ca-certificates cmake build-essential clang-14 git pkg-config autoconf automake libelf-dev
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-14 90
+          sudo update-alternatives --install /usr/bin/llvm-strip llvm-strip /usr/bin/llvm-strip-14 90
+          git clone https://github.com/libbpf/bpftool.git --branch v7.0.0 --single-branch
+          cd bpftool
+          git submodule update --init
+          cd src && sudo make install
+          popd
+
+      - name: Build modern BPF skeleton
+        run: |
+          mkdir skeleton-build
+          pushd skeleton-build
+          cmake -DUSE_BUNDLED_DEPS=ON -DBUILD_FALCO_MODERN_BPF=ON -DCREATE_TEST_TARGETS=Off ..
+          make ProbeSkeleton
+          popd
+
+      - name: Build Falco
+        run: |
+          mkdir build
+          pushd build
+          cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_BUNDLED_DEPS=On \
+            -DBUILD_FALCO_UNIT_TESTS=On \
+            -DFALCO_ETC_DIR=/etc/falco \
+            -DBUILD_FALCO_MODERN_BPF=ON \
+            -DMODERN_BPF_SKEL_DIR=${{ github.workspace }}/skeleton-build/skel_dir \
+            -DBUILD_DRIVER=Off \
+            -DBUILD_BPF=Off \
+            ..
+          make -j4 all
+          popd
+
+      - name: Run unit tests
+        run: |
+          pushd build
+          sudo ./unit_tests/falco_unit_tests 
+          popd
       
-      - name: Build and install package
-        if: matrix.minimal == 'Off'
+      - name: Package and install Falco
         run: |
           pushd build
           cmake -DCPACK_GENERATOR=TGZ ..
@@ -65,37 +119,29 @@ jobs:
           sudo cp -r * /
           popd
 
+      # todo(jasondellaluce): upload TGZ as an artifact and create a separate
+      # job for regression tests
       - name: Setup Go
-        if: matrix.minimal == 'Off'
         uses: actions/setup-go@v3
         with:
           go-version: '>=1.17.0'
 
       - name: Install go-junit-report
-        if: matrix.minimal == 'Off'
         run: |
           pushd submodules/falcosecurity-testing
           go install github.com/jstemmer/go-junit-report/v2@latest
           popd
   
       - name: Generate regression test files
-        if: matrix.minimal == 'Off'
         run: |
           pushd submodules/falcosecurity-testing
           go generate ./...
           popd
 
       - name: Run regression tests
-        if: matrix.minimal == 'Off'
         run: |
           pushd submodules/falcosecurity-testing
-          stat ./build/falco.test
-          stat ${{ github.workspace }}/build/userspace/falco/falco
-          ./build/falco.test \
-            -test.timeout=90s \
-            -test.v \
-            -falco-binary=${{ github.workspace }}/build/userspace/falco/falco \
-            >> ./report.txt 2>&1 || true
+          ./build/falco.test -test.timeout=90s -test.v >> ./report.txt 2>&1 || true
           cat ./report.txt | go-junit-report -set-exit-code > report.xml
           popd
 
