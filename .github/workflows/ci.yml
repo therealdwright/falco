@@ -13,7 +13,7 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         minimal: ['On', 'Off']
-        buildtype: ['Release', 'Debug']
+        buildtype: ['Debug']
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -61,7 +61,6 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          submodules: 'true'
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Install build dependencies
@@ -86,6 +85,7 @@ jobs:
           make ProbeSkeleton
           popd
 
+      # todo: build inside centos7 to minimize glibc version dependencies
       - name: Build Falco
         run: |
           mkdir build
@@ -109,7 +109,7 @@ jobs:
           sudo ./unit_tests/falco_unit_tests 
           popd
       
-      - name: Package and install Falco
+      - name: Build Falco package
         run: |
           pushd build
           cmake -DCPACK_GENERATOR=TGZ ..
@@ -118,9 +118,36 @@ jobs:
           cd $(ls *.tar.gz | sed -e 's/\.tar\.gz$//')
           sudo cp -r * /
           popd
+      
+      - name: Upload Falco package
+        uses: actions/upload-artifact@v3
+        with:
+          name: falco-dev-linux-x86_64.tar.gz
+          path: |
+            ${{ github.workspace }}/build/falco-*.tar.gz
 
-      # todo(jasondellaluce): upload TGZ as an artifact and create a separate
-      # job for regression tests
+  run-regression-tests:
+    needs: [build-bundled-deps]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Download Falco package
+        uses: actions/download-artifact@v3
+        with:
+          name: falco-dev-linux-x86_64.tar.gz
+      
+      - name: Install Falco package
+        run: |
+          tar -xvf $(ls falco-*.tar.gz)
+          cd $(ls falco-*.tar.gz | sed -e 's/\.tar\.gz$//')
+          sudo cp -r * /
+
       - name: Setup Go
         uses: actions/setup-go@v3
         with:
@@ -146,7 +173,7 @@ jobs:
           popd
 
       - name: Test Summary
-        if: matrix.minimal == 'Off' && (success() || failure())
+        if: always() # run this even if previous step fails
         uses: test-summary/action@v2
         with:
           paths: "submodules/falcosecurity-testing/report.xml"
