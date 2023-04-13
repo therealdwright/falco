@@ -150,55 +150,101 @@ jobs:
   # Execute integration tests based on the build results coming from the "build-centos7" job
   "tests-integration":
     docker:
-      - image: falcosecurity/falco-tester:latest
-        environment:
-          SOURCE_DIR: "/source"
-          BUILD_DIR: "/build"
-          BUILD_TYPE: "release"
+      - image: golang:1.20
     steps:
-      - setup_remote_docker
       - attach_workspace:
           at: /
       - run:
-          name: Execute integration tests
-          command: /usr/bin/entrypoint test
+          name: Run regression tests
+          command: |
+            # Update testing submodule
+            cd /source/falco
+            git submodule update --init --no-fetch
+
+            # Download go-juinit-report
+            go install github.com/jstemmer/go-junit-report/v2@latest
+
+            # Install Falco from package
+            cd /build/release
+            tar -xvf $(ls falco-*.tar.gz)
+            cd $(ls falco-*.tar.gz | sed -e 's/\.tar\.gz$//')
+            cp -r * /
+
+            # Generate test data, run tests, generate report
+            cd /source/falco/submodules/falcosecurity-testing
+            go generate ./...
+            ./build/falco.test -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            ./build/falcoctl.test -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            ./build/k8saudit.test -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            cat ./report.txt | go-junit-report -set-exit-code > report.xml
       - store_test_results:
-          path: /build/release/integration-tests-xunit
+          path: /source/falco/submodules/falcosecurity-testing/report.xml
+  # Execute integration tests based on the build results coming from the "build-musl" job
   "tests-integration-static":
     docker:
-      - image: falcosecurity/falco-tester:latest
-        environment:
-          SOURCE_DIR: "/source-static"
-          BUILD_DIR: "/build-static"
-          BUILD_TYPE: "release"
-          SKIP_PACKAGES_TESTS: "true"
-          SKIP_PLUGINS_TESTS: "true"
+      - image: golang:1.20
     steps:
-      - setup_remote_docker
       - attach_workspace:
           at: /
       - run:
-          name: Execute integration tests
-          command: /usr/bin/entrypoint test
+          name: Run regression tests
+          command: |
+            # Update testing submodule
+            cd /source-static/falco
+            git submodule update --init --no-fetch
+
+            # Download go-juinit-report
+            go install github.com/jstemmer/go-junit-report/v2@latest
+
+            # Install Falco from package
+            cd /build-static/release
+            tar -xvf $(ls falco-*.tar.gz)
+            cd $(ls falco-*.tar.gz | sed -e 's/\.tar\.gz$//')
+            cp -r * /
+
+            # Generate test data, run tests, generate report
+            cd /source-static/falco/submodules/falcosecurity-testing
+            go generate ./...
+            # Skipping tests for falcoctl and plugins
+            ./build/falco.test -falco-static -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            cat ./report.txt | go-junit-report -set-exit-code > report.xml
       - store_test_results:
-          path: /build-static/release/integration-tests-xunit
+          path: /source-static/falco/submodules/falcosecurity-testing/report.xml
   # Execute integration tests based on the build results coming from the "build-arm64" job
   "tests-integration-arm64":
     machine:
       enabled: true
-      image: ubuntu-2004:202101-01
+      image: ubuntu-2004:2023.02.1
     resource_class: arm.medium
     steps:
       - attach_workspace:
           at: /tmp
       - run:
-          name: Execute integration tests
+          name: Run regression tests
           command: |
-            docker run -e BUILD_TYPE="release" -e BUILD_DIR="/build" -e SOURCE_DIR="/source" -it -v /var/run/docker.sock:/var/run/docker.sock -v /tmp/source-arm64:/source -v /tmp/build-arm64:/build \
-              falcosecurity/falco-tester:latest \
-              test
+            # Update testing submodule
+            cd /tmp/source-arm64/falco
+            git submodule update --init --no-fetch
+
+            # Download go-juinit-report
+            go install github.com/jstemmer/go-junit-report/v2@latest
+
+            # Install Falco from package
+            cd /tmp/build-arm64/release
+            tar -xvf $(ls falco-*.tar.gz)
+            cd $(ls falco-*.tar.gz | sed -e 's/\.tar\.gz$//')
+            sudo cp -r * /
+
+            # Generate test data, run tests, generate report
+            cd /tmp/source-arm64/falco/submodules/falcosecurity-testing
+            go generate ./...
+            ./build/falco.test -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            ./build/falcoctl.test -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            ./build/k8saudit.test -test.timeout=90s -test.v | tee -a ./report.txt 2>&1 || true
+            cat ./report.txt | go-junit-report -set-exit-code > report.xml
       - store_test_results:
-          path: /tmp/build-arm64/release/integration-tests-xunit
+          path: /tmp/source-arm64/falco/submodules/falcosecurity-testing/report.xml
+
   "tests-driver-loader-integration":
     machine:
       image: ubuntu-2004:202107-02
